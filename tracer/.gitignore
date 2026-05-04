@@ -1,0 +1,8 @@
+lib/
+dist/
+out/
+
+# traces
+*.log
+*.rip
+*.zip

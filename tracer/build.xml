@@ -1,0 +1,189 @@
+<project name="MapReplayTracer" default="build" basedir=".">
+    <property environment="env" />
+
+    <!-- ============================================================
+         Directories
+         ============================================================ -->
+
+    <property name="build.dir" value="out" />
+    <property name="dist.dir" value="dist" />
+
+    <property name="build.patch.classes.dir" value="${build.dir}/patch/classes" />
+    <property name="build.agent.classes.dir" value="${build.dir}/agent/classes" />
+
+    <property name="dist.bin.dir" value="${dist.dir}/bin" />
+    <property name="dist.lib.dir" value="${dist.dir}/lib" />
+
+    <!-- ============================================================
+         Source roots
+         ============================================================ -->
+
+    <property name="src.patch.dir" value="src/java-base-patch" />
+    <property name="src.agent.dir" value="src/java-agent" />
+    <property name="src.native.dir" value="src/native" />
+    <property name="src.trace.format.dir" value="../trace-format/src/main/java" />
+
+    <!-- ============================================================
+         Output artifact names
+         Must match bin/mapreplay-java
+         ============================================================ -->
+
+    <property name="patch.jar" value="mapreplay-patch.jar" />
+    <property name="agent.jar" value="mapreplay-agent.jar" />
+    <property name="native.agent.lib" value="libmapreplay-tracer.so" />
+
+    <!-- Linux-only for now. Override with -Djdk.native.include.os=... if needed. -->
+    <property name="jdk.native.include.os" value="linux" />
+
+    <!-- ============================================================
+         Environment checks
+         ============================================================ -->
+
+    <target name="check-env">
+        <fail unless="env.JAVA_HOME" message="JAVA_HOME must be set." />
+
+        <available file="${env.JAVA_HOME}/bin/javac" property="javac.available" />
+        <fail unless="javac.available"
+              message="javac not found: ${env.JAVA_HOME}/bin/javac" />
+
+        <available file="${env.JAVA_HOME}/include/jni.h" property="jni.headers.available" />
+        <fail unless="jni.headers.available"
+              message="JNI headers not found: ${env.JAVA_HOME}/include/jni.h" />
+
+        <available file="${env.JAVA_HOME}/include/jvmti.h" property="jvmti.headers.available" />
+        <fail unless="jvmti.headers.available"
+              message="JVMTI headers not found: ${env.JAVA_HOME}/include/jvmti.h" />
+
+        <available file="${env.JAVA_HOME}/include/${jdk.native.include.os}/jni_md.h"
+                   property="jni.platform.headers.available" />
+        <fail unless="jni.platform.headers.available"
+              message="Platform JNI headers not found: ${env.JAVA_HOME}/include/${jdk.native.include.os}/jni_md.h" />
+
+        <available file="${src.trace.format.dir}" type="dir" property="trace.format.sources.available" />
+        <fail unless="trace.format.sources.available"
+              message="Trace format sources not found: ${src.trace.format.dir}" />
+    </target>
+
+    <!-- ============================================================
+         Clean / init
+         ============================================================ -->
+
+    <target name="clean">
+        <delete dir="${build.dir}" />
+        <delete dir="${dist.dir}" />
+
+        <!-- Remove legacy output directory from older builds, if present. -->
+        <delete dir="lib" />
+    </target>
+
+    <target name="init" depends="check-env">
+        <mkdir dir="${build.patch.classes.dir}" />
+        <mkdir dir="${build.agent.classes.dir}" />
+        <mkdir dir="${dist.bin.dir}" />
+        <mkdir dir="${dist.lib.dir}" />
+    </target>
+
+    <!-- ============================================================
+         Compile java.base patch
+         Includes:
+         - patched java.util.HashMap / LinkedHashMap if present
+         - jdk.internal.mapreplay.NativeTracer
+         - shared trace-format classes used by NativeTracer
+         ============================================================ -->
+
+    <target name="compile-patch" depends="init">
+        <path id="patch.module.path">
+            <pathelement location="${src.patch.dir}" />
+            <pathelement location="${src.trace.format.dir}" />
+        </path>
+
+        <pathconvert property="patch.module.path.string"
+                     refid="patch.module.path"
+                     pathsep="${path.separator}" />
+
+        <javac includeantruntime="false"
+               destdir="${build.patch.classes.dir}"
+               debug="false"
+               fork="true">
+
+            <src path="${src.patch.dir}" />
+            <src path="${src.trace.format.dir}" />
+
+            <compilerarg value="--patch-module=java.base=${patch.module.path.string}" />
+        </javac>
+    </target>
+
+    <target name="jar-patch" depends="compile-patch">
+        <jar destfile="${dist.lib.dir}/${patch.jar}"
+             basedir="${build.patch.classes.dir}" />
+    </target>
+
+    <!-- ============================================================
+         Compile Java activation agent
+         ============================================================ -->
+
+    <target name="compile-agent" depends="compile-patch">
+        <javac includeantruntime="false"
+               srcdir="${src.agent.dir}"
+               destdir="${build.agent.classes.dir}"
+               debug="false"
+               fork="true"
+               classpath="${build.patch.classes.dir}">
+
+            <compilerarg value="--patch-module=java.base=${build.patch.classes.dir}" />
+            <compilerarg value="--add-exports=java.base/jdk.internal.mapreplay=ALL-UNNAMED" />
+        </javac>
+    </target>
+
+    <target name="jar-agent" depends="compile-agent">
+        <jar destfile="${dist.lib.dir}/${agent.jar}"
+             basedir="${build.agent.classes.dir}">
+            <manifest>
+                <attribute name="Premain-Class"
+                           value="ch.usi.inf.dag.mapreplay.tracer.agent.TracerActivator" />
+            </manifest>
+        </jar>
+    </target>
+
+    <!-- ============================================================
+         Build native JVMTI/JNI agent
+         ============================================================ -->
+
+    <target name="compile-native" depends="init">
+        <exec executable="gcc" failonerror="true">
+            <arg value="-shared" />
+            <arg value="-fPIC" />
+
+            <arg value="-I${env.JAVA_HOME}/include" />
+            <arg value="-I${env.JAVA_HOME}/include/${jdk.native.include.os}" />
+
+            <arg value="-o" />
+            <arg value="${dist.lib.dir}/${native.agent.lib}" />
+
+            <arg value="${src.native.dir}/mapreplay_tracer.c" />
+
+            <arg value="-lpthread" />
+        </exec>
+    </target>
+
+    <!-- ============================================================
+         Copy launcher
+         ============================================================ -->
+
+    <target name="copy-bin" depends="init">
+        <copy file="bin/mapreplay-java"
+              todir="${dist.bin.dir}"
+              failonerror="true" />
+
+        <chmod file="${dist.bin.dir}/mapreplay-java"
+               perm="755" />
+    </target>
+
+    <!-- ============================================================
+         Build distribution
+         ============================================================ -->
+
+    <target name="dist" depends="jar-patch,jar-agent,compile-native,copy-bin" />
+
+    <target name="build" depends="clean,dist" />
+</project>
