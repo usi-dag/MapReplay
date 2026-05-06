@@ -20,16 +20,6 @@ The implementation currently targets a specific Java version and relies on patch
 ├── LICENSE
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
-├── docs/
-│   ├── architecture.md
-│   ├── build.md
-│   ├── usage.md
-│   ├── tracing-model.md
-│   ├── trace-format.md
-│   ├── postprocessing.md
-│   ├── replay-semantics.md
-│   ├── jdk-compatibility.md
-│   └── limitations.md
 ├── trace-format/
 │   └── Shared opcode and trace-format definitions
 ├── tracer/
